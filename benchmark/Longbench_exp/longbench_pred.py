@@ -13,10 +13,10 @@ import random
 import argparse
 import time
 import sys
-from gist_llama import GistLlamaForCausalLM
-import gist_llama
-from src.data import gist
-from gist_utils import Global_data
+from ssa.models.llama import GistLlamaForCausalLM
+from ssa.models import llama as gist_llama
+from ssa.data import gist
+from ssa.utils import Global_data
 
 import os
 os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))

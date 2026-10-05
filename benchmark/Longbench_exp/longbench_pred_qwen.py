@@ -24,10 +24,10 @@ import random
 import argparse
 import time
 import sys
-import gist_qwen2
-from gist_qwen2 import GistQwen2ForCausalLM
-from src.data import gist
-from gist_utils import Global_data
+from ssa.models import qwen2 as gist_qwen2
+from ssa.models.qwen2 import GistQwen2ForCausalLM
+from ssa.data import gist
+from ssa.utils import Global_data
 from chat import apply_chat_template
 
 import os

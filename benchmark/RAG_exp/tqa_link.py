@@ -10,10 +10,10 @@ from tqdm import tqdm
 
 from typing import List
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from gist_llama import GistLlamaForCausalLM
-import gist_llama
-from src.data import gist
-from gist_utils import Global_data
+from ssa.models.llama import GistLlamaForCausalLM
+from ssa.models import llama as gist_llama
+from ssa.data import gist
+from ssa.utils import Global_data
 
 
 def _interleave_link_tokens(doc_tokens: list[int], link_tokens: list[int]) -> list[int]:
