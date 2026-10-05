@@ -1,7 +1,7 @@
 """Sparse-attention forward path + dispatcher.
 
 `sparse_attention_forward` is a drop-in replacement for the reference
-attention path in `gist_qwen2.py`. It dispatches between prefill and decode
+attention path in `ssa/models/qwen2.py`. It dispatches between prefill and decode
 internally.
 
 `attn_dispatcher` is the single hook called from

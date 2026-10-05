@@ -18,30 +18,34 @@ the base model architecture or using an external index.
 
 All checkpoints and training datasets are available on the [HuggingFace collection](https://huggingface.co/collections/gist-sparse-attention/ssa).
 
-(PT = continued pretraining (`gist_cpt_trainer.py`); FT = selective finetuning (`gist_sft_trainer.py`).)
+(PT = continued pretraining (`ssa/training/cpt.py`); FT = selective finetuning (`ssa/training/sft.py`).)
 
 
 ## Repository Structure
 
 ```text
 simplified-sparse-attention/
-├── gist_qwen2.py                 # SSA Qwen2 model
-├── gist_llama.py                 # SSA Llama model for RAG experiments
-├── attn_candidate.py             # CUDA sparse attention dispatcher
-├── generation_utils.py           # gist-aware generation loop
-├── gist_caching.py               # gist KV-cache helpers
-├── gist_utils.py                 # shared runtime config and selection helpers
-├── gist_cpt_trainer.py           # continued pretraining
-├── gist_sft_trainer.py           # selective finetuning
-├── gist_sft_trainer_link.py      # link-token SFT variant for RAG
-├── gist_trainer_long.py          # long-context training driver
-├── src/
-│   ├── common.py
-│   └── data/
-│       ├── gist.py               # gist insertion and mask construction
-│       └── gist_input_preprocessor.py
-├── kernels/
-│   └── sparse_decode_attn.cu     # CUDA sparse decode kernel
+├── ssa/                          # installable package (`pip install -e .`)
+│   ├── utils.py                  # Global_data runtime config and selection helpers
+│   ├── attention/
+│   │   ├── sparse.py             # CUDA sparse attention dispatcher
+│   │   └── kernels/
+│   │       └── sparse_decode_attn.cu   # CUDA sparse decode kernel
+│   ├── models/
+│   │   ├── qwen2.py              # SSA Qwen2 model
+│   │   └── llama.py              # SSA Llama model for RAG experiments
+│   ├── generation/
+│   │   ├── mixin.py              # gist-aware generation loop
+│   │   └── caching.py            # gist KV-cache helpers
+│   ├── data/
+│   │   ├── gist.py               # gist insertion and mask construction
+│   │   └── gist_input_preprocessor.py
+│   └── training/
+│       ├── cpt.py                # continued pretraining
+│       ├── sft.py                # selective finetuning
+│       ├── sft_link.py           # link-token SFT variant for RAG
+│       └── long.py               # long-context training driver
+├── gist_*.py, attn_candidate.py, generation_utils.py, src/data/   # deprecated shims to ssa.*
 ├── benchmark/
 │   ├── Longbench_exp/            # LongBench prediction, evaluation, and included data
 │   │   ├── LongBench/            # bundled datasets.load_from_disk task folders
@@ -64,12 +68,17 @@ simplified-sparse-attention/
 
 ```bash
 pip install -r requirements.txt
+pip install -e .
 export TORCH_CUDA_ARCH_LIST=9.0  # H100; set this to your GPU architecture
 ```
 
-The CUDA decode kernel in `kernels/sparse_decode_attn.cu` is JIT-compiled on
+The CUDA decode kernel in `ssa/attention/kernels/sparse_decode_attn.cu` is JIT-compiled on
 first use through `torch.utils.cpp_extension.load`; there is no separate build
 step.
+
+Scripts can be run from any directory: inputs are resolved relative to each
+script and outputs go to `pred/`, `pred_e/` and `result/` under the repo root
+(passkey results: `result/passkey.jsonl`).
 
 ## Included Data
 
@@ -114,8 +123,8 @@ Useful inference knobs:
 Training starts with continued pretraining, then selective finetuning:
 
 ```bash
-python gist_cpt_trainer.py
-python gist_sft_trainer.py
+python -m ssa.training.cpt
+python -m ssa.training.sft
 ```
 
 ## Validated Results

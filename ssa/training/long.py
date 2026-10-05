@@ -1,4 +1,6 @@
 import os
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import glob
 import re
 from typing import Tuple
@@ -103,7 +105,7 @@ def main():
     parser.add_argument(
         "--deepspeed",
         type=str,
-        default="stage2.json"
+        default=os.path.join(REPO_ROOT, "stage2.json")
     )
     parser.add_argument(
         "--ft",

@@ -1,4 +1,7 @@
 import os
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
 import json
 import argparse
 import numpy as np
@@ -93,9 +96,9 @@ if __name__ == "__main__":
     args = parse_args()
     scores = dict()
     if args.e:
-        path = f"pred_e/{args.model}/{args.name}/"
+        path = os.path.join(REPO_ROOT, f"pred_e/{args.model}/{args.name}/")
     else:
-        path = f"pred/{args.model}/{args.name}/"
+        path = os.path.join(REPO_ROOT, f"pred/{args.model}/{args.name}/")
     all_files = os.listdir(path)
     print("Evaluating on:", all_files)
     for filename in all_files:
@@ -119,8 +122,8 @@ if __name__ == "__main__":
             score = scorer(dataset, predictions, answers, all_classes)
         scores[dataset] = score
     if args.e:
-        out_path = f"pred_e/{args.model}/{args.name}/result.json"
+        out_path = os.path.join(REPO_ROOT, f"pred_e/{args.model}/{args.name}/result.json")
     else:
-        out_path = f"pred/{args.model}/{args.name}/result.json"
+        out_path = os.path.join(REPO_ROOT, f"pred/{args.model}/{args.name}/result.json")
     with open(out_path, "w") as f:
         json.dump(scores, f, ensure_ascii=False, indent=4)

@@ -2,6 +2,9 @@ import warnings
 
 warnings.filterwarnings("once")
 import os
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
 from datasets import load_dataset, load_from_disk
 import torch
 import json
@@ -316,7 +319,8 @@ def main():
 
         accuracy = float(passed_tests) / num_tests
 
-        with open("./passkey.jsonl", "a") as fp:
+        os.makedirs(os.path.join(REPO_ROOT, "result"), exist_ok=True)
+        with open(os.path.join(REPO_ROOT, "result/passkey.jsonl"), "a") as fp:
             json.dump(
                 {
                     "model": model_name,

@@ -1,4 +1,7 @@
 import os
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
 from datasets import load_dataset, load_from_disk
 import torch
 import json
@@ -502,8 +505,8 @@ if __name__ == "__main__":
     seed_everything(42)
     args = parse_args()
 
-    model2path = json.load(open("benchmark/Longbench_exp/longbench_config/model2path.json", "r"))
-    model2maxlen = json.load(open("benchmark/Longbench_exp/longbench_config/model2maxlen.json", "r"))
+    model2path = json.load(open(os.path.join(HERE, "longbench_config/model2path.json"), "r"))
+    model2maxlen = json.load(open(os.path.join(HERE, "longbench_config/model2maxlen.json"), "r"))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_name = args.model
     model_path = args.ckpt_path if args.ckpt_path is not None else model2path[model_name]
@@ -515,18 +518,18 @@ if __name__ == "__main__":
 
     datasets = args.datasets
     # we design specific prompt format and max generation length for each task, feel free to modify them to optimize model output
-    dataset2prompt = json.load(open("benchmark/Longbench_exp/longbench_config/dataset2prompt.json", "r"))
-    dataset2maxlen = json.load(open("benchmark/Longbench_exp/longbench_config/dataset2maxlen.json", "r"))
+    dataset2prompt = json.load(open(os.path.join(HERE, "longbench_config/dataset2prompt.json"), "r"))
+    dataset2maxlen = json.load(open(os.path.join(HERE, "longbench_config/dataset2maxlen.json"), "r"))
     # predict on each dataset
     for dataset in datasets:
         if args.e:
             data = load_dataset("THUDM/LongBench", f"{dataset}_e", split="test")
-            os.makedirs(f"pred_e/{model_name}/{args.name}", exist_ok=True)
-            out_path = f"pred_e/{model_name}/{args.name}/{dataset}.jsonl"
+            os.makedirs(os.path.join(REPO_ROOT, f"pred_e/{model_name}/{args.name}"), exist_ok=True)
+            out_path = os.path.join(REPO_ROOT, f"pred_e/{model_name}/{args.name}/{dataset}.jsonl")
         else:
-            data = load_from_disk(f"benchmark/Longbench_exp/LongBench/{dataset}")
-            os.makedirs(f"pred/{model_name}/{args.name}", exist_ok=True)
-            out_path = f"pred/{model_name}/{args.name}/{dataset}.jsonl"
+            data = load_from_disk(os.path.join(HERE, f"LongBench/{dataset}"))
+            os.makedirs(os.path.join(REPO_ROOT, f"pred/{model_name}/{args.name}"), exist_ok=True)
+            out_path = os.path.join(REPO_ROOT, f"pred/{model_name}/{args.name}/{dataset}.jsonl")
         prompt_format = dataset2prompt[dataset]
         max_gen = dataset2maxlen[dataset]
 

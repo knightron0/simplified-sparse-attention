@@ -1,4 +1,7 @@
 import os
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
 import torch
 import string
 import argparse
@@ -124,7 +127,7 @@ args = parser.parse_args()
 
 pos = args.pos
 
-file_path = 'benchmark/RAG_exp/nq-open-10_0.jsonl'
+file_path = os.path.join(HERE, 'nq-open-10_0.jsonl')
 
 with open(file_path, 'r') as file:
     data = [json.loads(line) for line in file]
@@ -313,7 +316,7 @@ for i in tqdm(range(total_num)):
 
 accuracy = correct_num / total_num
 
-file_name = f"result/nolink_select_{args.name}_NQ_at{pos}_{accuracy}.jsonl"
+file_name = os.path.join(REPO_ROOT, f"result/nolink_select_{args.name}_NQ_at{pos}_{accuracy}.jsonl")
 if not os.path.exists(os.path.dirname(file_name)):
     os.makedirs(os.path.dirname(file_name))
 

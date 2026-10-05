@@ -1,4 +1,7 @@
 import os
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
 import torch
 import string
 import argparse
@@ -324,7 +327,7 @@ for i in tqdm(range(total_num)):
 
 accuracy = correct_num / total_num
 
-file_name = f"result/mqa_nolink_select_{args.name}_{accuracy}.jsonl"
+file_name = os.path.join(REPO_ROOT, f"result/mqa_nolink_select_{args.name}_{accuracy}.jsonl")
 if not os.path.exists(os.path.dirname(file_name)):
     os.makedirs(os.path.dirname(file_name))
 
