@@ -10,7 +10,7 @@
 #     F1-validated, NOT allclose. DECODE_SELECT=head is allclose-exact to eager.
 #
 # Knobs you can override on the command line, e.g.:
-#   MAX_SAMPLES=5 CONTEXT_REPEAT=5 bash run_optimized.sh
+#   MAX_SAMPLES=5 CONTEXT_REPEAT=5 bash scripts/run_optimized.sh
 #
 #   MAX_SAMPLES   number of triviaqa samples            (default 1)
 #   CONTEXT_REPEAT  repeat the document to inflate k_len (default 1; 5 ~= 36k, OOM ceiling)

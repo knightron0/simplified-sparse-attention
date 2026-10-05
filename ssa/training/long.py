@@ -105,7 +105,7 @@ def main():
     parser.add_argument(
         "--deepspeed",
         type=str,
-        default=os.path.join(REPO_ROOT, "stage2.json")
+        default=os.path.join(REPO_ROOT, "configs/deepspeed/stage2.json")
     )
     parser.add_argument(
         "--ft",

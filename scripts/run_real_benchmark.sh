@@ -6,9 +6,9 @@
 # predictions, then scores them with the official LongBench evaluator.
 #
 # Usage:
-#   bash run_real_benchmark.sh                 # full triviaqa (200 samples)
-#   NSAMPLES=50 bash run_real_benchmark.sh     # first 50 samples
-#   DATASET=triviaqa bash run_real_benchmark.sh
+#   bash scripts/run_real_benchmark.sh                 # full triviaqa (200 samples)
+#   NSAMPLES=50 bash scripts/run_real_benchmark.sh     # first 50 samples
+#   DATASET=triviaqa bash scripts/run_real_benchmark.sh
 #
 # Output: per-sample latency, mean / median / steady-state (excl. cold sample 0)
 #         prefill_ms & tpot_ms, and the LongBench score (first-line F1).
@@ -18,7 +18,7 @@
 # the flex compile across launches.
 
 set -e
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 export PYTHONPATH="$(pwd):$PYTHONPATH"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
@@ -40,10 +40,10 @@ export DECODE_SELECT="${DECODE_SELECT:-head}"
 # ---- OPTIONAL faster decode via torch.compile (gated, default off) ----
 # All F1-validated (LongBench triviaqa 88-91). Pick ONE:
 #   (a) flex-compatible, ~21ms decode + fast prefill (recommended faster default):
-#       DECODE_COMPILE=1 DECODE_COMPILE_MODE=default DECODE_GMAX_BUCKET=1 bash run_real_benchmark.sh
+#       DECODE_COMPILE=1 DECODE_COMPILE_MODE=default DECODE_GMAX_BUCKET=1 bash scripts/run_real_benchmark.sh
 #   (b) FASTEST decode ~18ms (robust, recompiles~0) — needs DENSE prefill (reduce-overhead
 #       CUDA graphs conflict with flex's torch.compile in PyTorch's cudagraph_trees):
-#       DECODE_COMPILE=1 DECODE_GMAX_BUCKET=1 PREFILL_KERNEL=dense bash run_real_benchmark.sh
+#       DECODE_COMPILE=1 DECODE_GMAX_BUCKET=1 PREFILL_KERNEL=dense bash scripts/run_real_benchmark.sh
 # DECODE_GMAX_BUCKET pads Gmax+kk to a grid so the CUDA graph is reused across lengths
 # (robust varying-length). Leave DECODE_COMPILE unset for the zero-warmup ~24ms group path.
 export DECODE_COMPILE="${DECODE_COMPILE:-0}"

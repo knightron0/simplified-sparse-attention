@@ -54,11 +54,15 @@ simplified-sparse-attention/
 │   │   └── nq-open-10_0.jsonl    # bundled NQ-open RAG data
 │   └── Passkey_exp/              # passkey retrieval evaluation
 ├── data_process/                 # optional data preparation utilities
-├── run_real_benchmark.sh         # optimized LongBench latency + accuracy run
-├── run_longbench.sh              # quick LongBench run
-├── run_rag.sh                    # RAG evaluation entrypoint
-├── stage*.json                   # DeepSpeed configs
-├── step*.yaml                    # training configs
+├── scripts/
+│   ├── run_real_benchmark.sh     # optimized LongBench latency + accuracy run
+│   ├── run_longbench.sh          # quick LongBench run
+│   ├── run_optimized.sh          # run_longbench.sh with the optimized sparse settings
+│   ├── run_rag.sh                # RAG evaluation entrypoint
+│   └── check_correctness.sh      # sparse (head) vs eager prediction check
+├── configs/
+│   ├── deepspeed/stage*.json     # DeepSpeed configs
+│   └── accelerate/step*.yaml     # accelerate launch configs
 ├── requirements.txt
 ├── pyproject.toml
 └── README.md
@@ -93,7 +97,7 @@ The NQ-open RAG data used by `benchmark/RAG_exp/nq_*.py` is bundled at
 Run the optimized LongBench path:
 
 ```bash
-bash run_real_benchmark.sh
+bash scripts/run_real_benchmark.sh
 ```
 
 Or call the prediction script directly:

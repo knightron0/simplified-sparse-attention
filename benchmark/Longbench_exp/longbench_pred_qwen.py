@@ -546,7 +546,7 @@ if __name__ == "__main__":
             out_path,
         )
 
-    # ---- Final metrics block (parsed by run_longbench.sh extractor) ----
+    # ---- Final metrics block (parsed by scripts/run_longbench.sh extractor) ----
     runs = _BENCH_RUNS
     n = len(runs["prefill_ms"])
     avg_prefill = sum(runs["prefill_ms"]) / n if n else 0.0
@@ -561,7 +561,7 @@ if __name__ == "__main__":
     if runs["candidate_label"] == "ref":
         _corr = "n/a (eager reference run)"
     elif _sel == "head":
-        _corr = "head selection = allclose-exact vs eager (run check_correctness.sh to verify)"
+        _corr = "head selection = allclose-exact vs eager (run scripts/check_correctness.sh to verify)"
     else:
         _corr = f"{_sel} selection = different algorithm, F1-validated not allclose"
     print(f"correctness:      not checked per-run; {_corr}")

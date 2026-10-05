@@ -13,10 +13,10 @@
 #
 # Assumes the Python env is already active (module loads + venv), like the other
 # run_*.sh scripts. Usage:
-#   bash check_correctness.sh                 # 5 samples, triviaqa
-#   NSAMPLES=10 DATASET=hotpotqa bash check_correctness.sh
+#   bash scripts/check_correctness.sh                 # 5 samples, triviaqa
+#   NSAMPLES=10 DATASET=hotpotqa bash scripts/check_correctness.sh
 set -e
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 export PYTHONPATH="$(pwd):$PYTHONPATH"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
