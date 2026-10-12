@@ -2,6 +2,7 @@
 
 
 import math
+import os
 from typing import List, Optional, Tuple, Union, Callable
 import copy
 import torch
@@ -665,6 +666,7 @@ class GistLlamaAttention(LlamaAttention):
         past_key_values: Optional[Cache] = None,
         cache_position: Optional[torch.LongTensor] = None,
         decode: bool = False,
+        dense_gist: bool = False,
         **kwargs: Unpack[TransformersKwargs],
     ) -> tuple[torch.Tensor, torch.Tensor]:
         input_shape = hidden_states.shape[:-1]
@@ -682,7 +684,33 @@ class GistLlamaAttention(LlamaAttention):
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
-        if decode:
+        if dense_gist:
+            # Full gist-masked attention (no selection) from the lazy mask spec.
+            from attn_candidate import gist_flex_attention
+            attn_output = gist_flex_attention(
+                self, query_states, key_states, value_states, kwargs["gist_mask_spec"], self.scaling,
+            )
+            attn_weights = None
+        elif not self.training and os.environ.get("ATTN_IMPL", "ref") == "sparse":
+            # Opt-in (ATTN_IMPL=sparse) optimized inference path shared with gist_qwen2:
+            # flex/dense prefill + compact CUDA sparse decode. Batch-1 only, and the
+            # decode cache assumes generated tokens are never gist tokens (the caller
+            # must suppress them, see benchmark/latency_sweep.py). Default stays on the
+            # eager reference below so existing RAG / LongBench Llama scripts are unchanged.
+            from attn_candidate import sparse_attention_forward
+            attn_output, attn_weights = sparse_attention_forward(
+                self,
+                query_states,
+                key_states,
+                value_states,
+                attention_mask,
+                scaling=self.scaling,
+                dropout=0.0,
+                decode=decode,
+                chunk_q=512,
+                **kwargs,
+            )
+        elif decode:
             attention_interface: Callable = eager_attention_forward_decoding
             attn_output, attn_weights = attention_interface(
                 self,
@@ -767,7 +795,9 @@ class GistLlamaDecoderLayer(GradientCheckpointingLayer):
             #     )
             #     attention_mask = causal_mask + attention_mask_gist_float
 
-            selective = 0
+            # Lazy-mask prefill has no dense mask for the standard path; run the same
+            # full gist-masked attention through flex instead.
+            selective = 3 if kwargs.get("gist_mask_spec") is not None else 0
         
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -780,6 +810,18 @@ class GistLlamaDecoderLayer(GradientCheckpointingLayer):
                 past_key_values=past_key_values,
                 use_cache=use_cache,
                 cache_position=cache_position,
+                position_embeddings=position_embeddings,
+                **kwargs,
+            )
+        elif selective == 3:
+            hidden_states, _ = self.self_attn.select_forward(
+                hidden_states=hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                cache_position=cache_position,
+                dense_gist=True,
                 position_embeddings=position_embeddings,
                 **kwargs,
             )
@@ -928,26 +970,40 @@ class GistLlamaModel(LlamaPreTrainedModel):
         if past_key_values is not None:
             past_key_values_length = past_key_values.get_seq_length()
 
-        causal_mask = self._prepare_decoder_attention_mask(
-            attention_mask,
-            (batch_size, seq_length),
-            inputs_embeds,
-            past_key_values_length,
-        )
+        if seq_length > 1 and attention_mask_gist is not None and attention_mask_gist.shape[2] == 1:
+            # Lazy-mask prefill: the caller passed only the LAST ROW of the gist mask
+            # (all decoding needs). Masks are evaluated on demand from per-token
+            # vectors (gist_mask_lazy.GistMaskSpec) instead of [N, N] tensors.
+            if os.environ.get("ATTN_IMPL", "ref") != "sparse" or self.training:
+                raise ValueError("a row-shaped attention_mask_gist (lazy mask) needs eval mode and ATTN_IMPL=sparse")
+            from gist_mask_lazy import GistMaskSpec
+            kwargs["gist_mask_spec"] = GistMaskSpec(
+                input_ids, Global_data.gist_token_id, Global_data.sink_size,
+                Global_data.num_previous_chunks, Global_data.pad_token_id, attention_mask,
+            )
+            _attention_mask = None
+            kwargs["causal_mask"] = None
+        else:
+            causal_mask = self._prepare_decoder_attention_mask(
+                attention_mask,
+                (batch_size, seq_length),
+                inputs_embeds,
+                past_key_values_length,
+            )
 
-        attention_mask_gist_float = torch.full(
-            attention_mask_gist.shape,  # Use the 4D shape [8, 1, 172, 172]
-            torch.finfo(self.dtype).min,
-            dtype=self.dtype,
-            device=attention_mask_gist.device
-        )
-        attention_mask_gist_float = attention_mask_gist_float.masked_fill(
-            attention_mask_gist.bool(), 0.0
-        )
+            attention_mask_gist_float = torch.full(
+                attention_mask_gist.shape,  # Use the 4D shape [8, 1, 172, 172]
+                torch.finfo(self.dtype).min,
+                dtype=self.dtype,
+                device=attention_mask_gist.device
+            )
+            attention_mask_gist_float = attention_mask_gist_float.masked_fill(
+                attention_mask_gist.bool(), 0.0
+            )
 
-        _attention_mask = causal_mask + attention_mask_gist_float
+            _attention_mask = causal_mask + attention_mask_gist_float
 
-        kwargs["causal_mask"] = causal_mask
+            kwargs["causal_mask"] = causal_mask
         kwargs["attention_mask_gist"] = attention_mask_gist
 
         hidden_states = inputs_embeds

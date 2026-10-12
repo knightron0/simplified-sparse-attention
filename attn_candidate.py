@@ -559,7 +559,7 @@ def _decode_forward(module, query, key, value, attention_mask, scaling, dropout,
 
     _select_mode = os.environ.get("DECODE_SELECT", "head")
     if (_select_mode == "group" and num_levels in (1, 2)
-            and module.num_key_value_groups > 1 and qb == 1 and d == 128):
+            and module.num_key_value_groups > 1 and qb == 1 and d in (64, 128)):
         # Per-group selection: SUM the group heads' query.gist scores into
         # one per-group score, then a single top-k per group (see _select_per_group).
         # This is a DIFFERENT selection from the paper's per-head-then-union (= the
@@ -631,7 +631,7 @@ def _decode_forward(module, query, key, value, attention_mask, scaling, dropout,
         and num_levels in (1, 2)
         and module.num_key_value_groups > 1
         and qb == 1
-        and d == 128
+        and d in (64, 128)
     ):
         hpg = module.num_key_value_groups
         num_kv_heads = H // hpg
@@ -704,13 +704,13 @@ def _decode_forward(module, query, key, value, attention_mask, scaling, dropout,
             print(f"[DUMP_DECODE] wrote {_dump} k_len={k_len} layer={module.layer_idx}", flush=True)
         return out, None
 
-    # Shapes the CUDA sparse-decode kernel does not cover (single-level gists,
-    # non-GQA, head_dim != 128, q_len > 1). The eager PyTorch fallback was removed
+    # Shapes the CUDA sparse-decode kernel does not cover (>2 gist levels,
+    # non-GQA, head_dim not in {64, 128}, q_len > 1). The eager PyTorch fallback was removed
     # in the CUDA-only cleanup; the differentiable reference still lives in
     # gist_qwen2.eager_attention_forward_decoding and is used for training.
     raise NotImplementedError(
-        "sparse_decode kernel requires 2-level gists, GQA (num_kv_groups>1), "
-        f"head_dim=128, q_len=1; got num_levels={num_levels}, "
+        "sparse_decode kernel requires 1- or 2-level gists, GQA (num_kv_groups>1), "
+        f"head_dim 64 or 128, q_len=1; got num_levels={num_levels}, "
         f"groups={module.num_key_value_groups}, d={d}, qb={qb}. "
         "Use the eager training path (ATTN_IMPL unset / module.training) for these shapes."
     )
@@ -732,6 +732,7 @@ def _decode_forward(module, query, key, value, attention_mask, scaling, dropout,
 # Lazy flex_attention handles (compiled once).
 _FLEX = None
 _CREATE_BLOCK_MASK = None
+_FLEX_STATIC = None  # static-shape flex for the lazy-mask path (gist_flex_attention)
 
 
 def _get_flex():
@@ -741,6 +742,27 @@ def _get_flex():
         _FLEX = torch.compile(flex_attention)
         _CREATE_BLOCK_MASK = create_block_mask
     return _FLEX, _CREATE_BLOCK_MASK
+
+
+def gist_flex_attention(module, query, key, value, spec, scaling):
+    """Attention over the full gist mask, evaluated lazily from a GistMaskSpec
+    (gist_mask_lazy.py): flex_attention on the permuted-key block mask with GQA,
+    never materializing an [N, N] mask or repeat_kv'd K/V. Returns [B, q_len, H, d].
+    Used for prefill Path A and for the (non-selective) first layer."""
+    global _FLEX_STATIC
+    if _FLEX_STATIC is None:
+        from torch.nn.attention.flex_attention import flex_attention
+        # Static shapes: torch 2.6 inductor cannot lower a mask_mod whose captured
+        # tensors have symbolic sizes (dynamic recompiles). One compile per length;
+        # raise the recompile limit so long sweeps don't fall back to eager flex.
+        torch._dynamo.config.cache_size_limit = max(torch._dynamo.config.cache_size_limit, 64)
+        _FLEX_STATIC = torch.compile(flex_attention, dynamic=False)
+    flex = _FLEX_STATIC
+    perm = spec.perm()
+    out = flex(query, key[:, :, perm, :], value[:, :, perm, :],
+               block_mask=spec.flex_block_mask(), scale=scaling,
+               enable_gqa=module.num_key_value_groups > 1)
+    return out.transpose(1, 2)
 
 
 class _PrefillFlexCache:
@@ -871,6 +893,9 @@ def _prefill_forward(module, query, key, value, attention_mask, scaling, dropout
     PAD_ID = Global_data.pad_token_id
     sink_size = Global_data.sink_size
     causal_mask = kwargs.get("causal_mask", None)
+    # Lazy O(N) mask (gist_mask_lazy.GistMaskSpec): attention_mask / causal_mask are
+    # None and every mask entry is computed from per-token vectors on demand.
+    spec = kwargs.get("gist_mask_spec", None)
     top_k = copy.deepcopy(Global_data.top_k)
     if Global_data.comp_factor > 0:
         comp_factor = Global_data.comp_factor
@@ -915,7 +940,7 @@ def _prefill_forward(module, query, key, value, attention_mask, scaling, dropout
 
     # One-shot prefill mask analysis (env-gated).
     _pdump = os.environ.get("DUMP_PREFILL", "")
-    if _pdump and not getattr(module, "_pdumped", False) and module.layer_idx == 1:
+    if _pdump and spec is None and not getattr(module, "_pdumped", False) and module.layer_idx == 1:
         module._pdumped = True
         amb = (attention_mask[0, 0] > -1e-4)  # [q_len, k_len] bool (B=1)
         per_q = amb.sum(dim=1)  # keys visible per query
@@ -931,7 +956,9 @@ def _prefill_forward(module, query, key, value, attention_mask, scaling, dropout
 
     # ----- PATH A: attention over the gist mask for ALL queries (prefix gets
     # its final output here; suffix overwritten by Path B).
-    if os.environ.get("PREFILL_KERNEL", "dense") == "flex":
+    if spec is not None:
+        out[:] = gist_flex_attention(module, query, key, value, spec, scaling)
+    elif os.environ.get("PREFILL_KERNEL", "dense") == "flex":
         # Sparse block-sparse via key-column permutation (cluster scattered
         # global gist/sink columns contiguous) + flex_attention. Exactly the
         # same mask → allclose; ~6-7x faster, skips ~90% of blocks.
@@ -977,14 +1004,20 @@ def _prefill_forward(module, query, key, value, attention_mask, scaling, dropout
         )
 
         q_gather_blk = q_pos_blk[:, None, :, None].expand(B, 1, qb, k_len)
-        attention_mask_bool_blk = (attention_mask > -1e-4).bool().gather(2, q_gather_blk)
+        if spec is not None:
+            attention_mask_bool_blk = spec.rows(q_pos_blk)
+        else:
+            attention_mask_bool_blk = (attention_mask > -1e-4).bool().gather(2, q_gather_blk)
         attention_mask_suffix_blk = torch.where(
             valid_q_blk[:, None, :, None],
             attention_mask_bool_blk,
             torch.zeros_like(attention_mask_bool_blk),
         )
 
-        cm_blk = (causal_mask.gather(2, q_gather_blk) > -1e-4)
+        if spec is not None:
+            cm_blk = spec.causal_rows(q_pos_blk)
+        else:
+            cm_blk = (causal_mask.gather(2, q_gather_blk) > -1e-4)
         cm_blk = torch.where(
             valid_q_blk[:, None, :, None], cm_blk, torch.zeros_like(cm_blk),
         )

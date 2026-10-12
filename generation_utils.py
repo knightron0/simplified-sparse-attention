@@ -11,6 +11,8 @@ from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import (
     StoppingCriteriaList, validate_stopping_criteria)
 from transformers.generation.utils import (GenerationMixin,
+                                           GenerateDecoderOnlyOutput,
+                                           GenerateEncoderDecoderOutput,
                                            GreedySearchDecoderOnlyOutput,
                                            GreedySearchEncoderDecoderOutput,
                                            GreedySearchOutput)

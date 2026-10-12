@@ -28,9 +28,8 @@
 #include <cuda_bf16.h>
 #include <math.h>
 
-#ifndef D_HEAD
-#define D_HEAD 128
-#endif
+// Head dim is a template parameter (DH); 64 (Llama-3.2-1B) and 128 (Qwen2-7B)
+// are instantiated and selected at runtime from q.size(3).
 
 namespace {
 
@@ -93,7 +92,8 @@ __global__ void build_compact_idx_kernel(
     }
 }
 
-// Combine partials across splits. One block per head, D_HEAD threads.
+// Combine partials across splits. One block per head, DH threads.
+template <int DH>
 __global__ void sparse_decode_combine_kernel(
     const float* __restrict__ partial_m,   // [H, nsplit]
     const float* __restrict__ partial_l,   // [H, nsplit]
@@ -102,7 +102,7 @@ __global__ void sparse_decode_combine_kernel(
     int H, int nsplit)
 {
     const int h = blockIdx.x;
-    const int d = threadIdx.x;  // 0..D_HEAD-1
+    const int d = threadIdx.x;  // 0..DH-1
     if (h >= H) return;
 
     // global max over splits
@@ -112,7 +112,7 @@ __global__ void sparse_decode_combine_kernel(
         if (ms > m_glob) m_glob = ms;
     }
     if (m_glob == -INFINITY) {  // no kept keys at all (shouldn't happen)
-        out[(size_t)h * D_HEAD + d] = __float2bfloat16(0.f);
+        out[(size_t)h * DH + d] = __float2bfloat16(0.f);
         return;
     }
     float l_tot = 0.f;
@@ -123,17 +123,17 @@ __global__ void sparse_decode_combine_kernel(
         if (ls == 0.f) continue;
         float w = __expf(ms - m_glob);
         l_tot += ls * w;
-        acc += w * partial_acc[((size_t)h * nsplit + s) * D_HEAD + d];
+        acc += w * partial_acc[((size_t)h * nsplit + s) * DH + d];
     }
     float o = (l_tot > 0.f) ? (acc / l_tot) : 0.f;
-    out[(size_t)h * D_HEAD + d] = __float2bfloat16(o);
+    out[(size_t)h * DH + d] = __float2bfloat16(o);
 }
 
 // Compact-attention: per-GROUP shared-memory tiled flash-decode. Loads each
 // kept key's K/V ONCE per group into shared memory and reuses it across the HPG
 // heads (the v1 kernel re-loads K/V per head => HPG x redundant load
 // instructions / L1 pressure). One block = (group g, split s); HPG warps.
-template <int HPG, int DPL /* D_HEAD/32 */, int BLOCK_N>
+template <int HPG, int DH, int BLOCK_N>
 __global__ void sparse_decode_partial_compact_kernel(
     const __nv_bfloat16* __restrict__ q,    // [H, D]
     const __nv_bfloat16* __restrict__ K,    // [num_kv, k_len, D]
@@ -153,6 +153,7 @@ __global__ void sparse_decode_partial_compact_kernel(
     const int tid = hg * 32 + lane;
     const int nthreads = HPG * 32;
     const int h = g * HPG + hg;
+    constexpr int DPL = DH / 32;            // elements of the head dim per lane
 
     int count = counts[g];
     if (count > cap) count = cap;   // parallel compaction may overshoot cap
@@ -162,18 +163,18 @@ __global__ void sparse_decode_partial_compact_kernel(
     int i_end = i_start + sc_g;
     if (i_end > count) i_end = count;
 
-    __shared__ __nv_bfloat16 sK[BLOCK_N][D_HEAD];
-    __shared__ __nv_bfloat16 sV[BLOCK_N][D_HEAD];
+    __shared__ __nv_bfloat16 sK[BLOCK_N][DH];
+    __shared__ __nv_bfloat16 sV[BLOCK_N][DH];
     __shared__ float sCB[BLOCK_N];
 
-    const __nv_bfloat16* Kg = K + (size_t)g * k_len * D_HEAD;
-    const __nv_bfloat16* Vg = V + (size_t)g * k_len * D_HEAD;
+    const __nv_bfloat16* Kg = K + (size_t)g * k_len * DH;
+    const __nv_bfloat16* Vg = V + (size_t)g * k_len * DH;
     const int* ig = idx_list + (size_t)g * cap;
 
     float qf[DPL];
 #pragma unroll
     for (int i = 0; i < DPL; ++i)
-        qf[i] = (h < H) ? __bfloat162float(q[h * D_HEAD + lane + 32 * i]) : 0.f;
+        qf[i] = (h < H) ? __bfloat162float(q[h * DH + lane + 32 * i]) : 0.f;
 
     float m = -INFINITY, l = 0.f, acc[DPL];
 #pragma unroll
@@ -182,11 +183,11 @@ __global__ void sparse_decode_partial_compact_kernel(
     for (int t0 = i_start; t0 < i_end; t0 += BLOCK_N) {
         int tn = i_end - t0; if (tn > BLOCK_N) tn = BLOCK_N;
         // cooperative coalesced load of tn keys' K/V (+causal bias) into shared
-        for (int e = tid; e < tn * D_HEAD; e += nthreads) {
-            int j = e / D_HEAD, dd = e - j * D_HEAD;
+        for (int e = tid; e < tn * DH; e += nthreads) {
+            int j = e / DH, dd = e - j * DH;
             int k = ig[t0 + j];
-            sK[j][dd] = Kg[(size_t)k * D_HEAD + dd];
-            sV[j][dd] = Vg[(size_t)k * D_HEAD + dd];
+            sK[j][dd] = Kg[(size_t)k * DH + dd];
+            sV[j][dd] = Vg[(size_t)k * DH + dd];
         }
         for (int j = tid; j < tn; j += nthreads) sCB[j] = causal_bias[ig[t0 + j]];
         __syncthreads();
@@ -215,7 +216,7 @@ __global__ void sparse_decode_partial_compact_kernel(
     if (h < H) {
         const size_t base = (size_t)h * nsplit + s;
         if (lane == 0) { partial_m[base] = m; partial_l[base] = l; }
-        float* acc_out = partial_acc + base * D_HEAD;
+        float* acc_out = partial_acc + base * DH;
 #pragma unroll
         for (int i = 0; i < DPL; ++i) acc_out[lane + 32 * i] = acc[i];
     }
@@ -235,7 +236,7 @@ torch::Tensor sparse_decode_attn_compact(
     double scaling, int64_t nsplit, int64_t cap)
 {
     int H = q.size(1), num_kv = K.size(1), k_len = K.size(2), D = q.size(3);
-    TORCH_CHECK(D == D_HEAD, "kernel compiled for D_HEAD=", D_HEAD, " got ", D);
+    TORCH_CHECK(D == 64 || D == 128, "sparse decode kernel supports head_dim 64 or 128; got ", D);
     // Explicit invariants — this kernel is a single-token (q_len=1), batch-1, bf16
     // GQA flash-decode. Fail loudly rather than silently computing the wrong thing
     // (e.g. B>1 would only attend the first sample and return [1,1,H,D]).
@@ -280,25 +281,32 @@ torch::Tensor sparse_decode_attn_compact(
     const __nv_bfloat16* Kp = reinterpret_cast<const __nv_bfloat16*>(K.data_ptr<at::BFloat16>());
     const __nv_bfloat16* Vp = reinterpret_cast<const __nv_bfloat16*>(V.data_ptr<at::BFloat16>());
 
-#define LAUNCH_COMPACT(HPGV) \
-    sparse_decode_partial_compact_kernel<HPGV, D_HEAD/32, 64><<<grid, block, 0, stream>>>( \
+#define LAUNCH_COMPACT(HPGV, DHV) \
+    sparse_decode_partial_compact_kernel<HPGV, DHV, 64><<<grid, block, 0, stream>>>( \
         qp, Kp, Vp, idx_list.data_ptr<int>(), counts.data_ptr<int>(), causal_bias.data_ptr<float>(), \
         partial_m.data_ptr<float>(), partial_l.data_ptr<float>(), partial_acc.data_ptr<float>(), \
         H, num_kv, k_len, (int)cap, (int)nsplit, (float)scaling)
-    switch (hpg) {
-        case 1: LAUNCH_COMPACT(1); break;  case 2: LAUNCH_COMPACT(2); break;
-        case 4: LAUNCH_COMPACT(4); break;  case 7: LAUNCH_COMPACT(7); break;
-        case 8: LAUNCH_COMPACT(8); break;  case 16: LAUNCH_COMPACT(16); break;
-        default: TORCH_CHECK(false, "unsupported heads_per_group=", hpg);
+#define DISPATCH_HPG(DHV) \
+    switch (hpg) { \
+        case 1: LAUNCH_COMPACT(1, DHV); break;  case 2: LAUNCH_COMPACT(2, DHV); break; \
+        case 4: LAUNCH_COMPACT(4, DHV); break;  case 7: LAUNCH_COMPACT(7, DHV); break; \
+        case 8: LAUNCH_COMPACT(8, DHV); break;  case 16: LAUNCH_COMPACT(16, DHV); break; \
+        default: TORCH_CHECK(false, "unsupported heads_per_group=", hpg); \
     }
+    if (D == 128) { DISPATCH_HPG(128) } else { DISPATCH_HPG(64) }
+#undef DISPATCH_HPG
 #undef LAUNCH_COMPACT
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-    sparse_decode_combine_kernel<<<dim3(H), dim3(D), 0, stream>>>(
-        partial_m.data_ptr<float>(), partial_l.data_ptr<float>(),
-        partial_acc.data_ptr<float>(),
-        reinterpret_cast<__nv_bfloat16*>(out.data_ptr<at::BFloat16>()),
-        H, (int)nsplit);
+    auto* outp = reinterpret_cast<__nv_bfloat16*>(out.data_ptr<at::BFloat16>());
+    if (D == 128)
+        sparse_decode_combine_kernel<128><<<dim3(H), dim3(D), 0, stream>>>(
+            partial_m.data_ptr<float>(), partial_l.data_ptr<float>(),
+            partial_acc.data_ptr<float>(), outp, H, (int)nsplit);
+    else
+        sparse_decode_combine_kernel<64><<<dim3(H), dim3(D), 0, stream>>>(
+            partial_m.data_ptr<float>(), partial_l.data_ptr<float>(),
+            partial_acc.data_ptr<float>(), outp, H, (int)nsplit);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return out;
 }
